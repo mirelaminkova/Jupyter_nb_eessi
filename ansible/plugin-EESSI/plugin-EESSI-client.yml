@@ -54,10 +54,18 @@
         - name: Probe Stratum 1 servers by geo location to trigger reordering
           shell: cvmfs_talk -i pilot.eessi-hpc.org host probe geo
 
-        - name: Ensure you can run the run.sh file
-          file:
-           path: /ansible/jupyter/run.sh
-           mode: '0755'
-        - name: Run the run.sh file
-          shell: /bin/bash ./run.sh
-          become: yes
+
+- name: Run the sh
+  hosts: localhost
+  become: true  
+  tasks:
+    - name: Copy the run.sh script
+      copy:
+        src: files/run.sh  
+        dest: /opt/run.sh
+        mode: '0777'
+
+    - name: Execute run.sh with EESSI-extend as a non-root user
+      become: true
+      become_user: mminkova3
+      shell: "/bin/bash -lc '/opt/run.sh'"
