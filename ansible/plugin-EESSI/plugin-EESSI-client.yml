@@ -55,17 +55,46 @@
           shell: cvmfs_talk -i pilot.eessi-hpc.org host probe geo
 
 
-- name: Run the sh
+- name: Run JupyterHub from EESSI
   hosts: localhost
   become: true  
   tasks:
     - name: Copy the run.sh script
       copy:
-        src: files/run.sh  
+        src: files/run.sh
         dest: /opt/run.sh
         mode: '0777'
 
-    - name: Execute run.sh with EESSI-extend as a non-root user
-      become: true
-      become_user: mminkova3
-      shell: "/bin/bash -lc '/opt/run.sh'"
+    - name: Ensure JupyterHub systemd service is in place
+      copy:
+        dest: /etc/systemd/system/jupyterhub.service
+        content: |
+          [Unit]
+          Description=JupyterHub from EESSI Modules
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=mminkova3
+          ExecStart=/bin/bash -l -c '/opt/run.sh'
+          Restart=always
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd and enable JupyterHub service
+      systemd:
+        daemon_reload: yes
+        enabled: yes
+        name: jupyterhub
+        state: restarted
+
+    - name: Ensure JupyterHub is running
+      service:
+        name: jupyterhub
+        state: started
+        enabled: yes
+
+    - debug:
+        msg: 'JupyterHub is running at http://{{ ansible_host }}:8000'
