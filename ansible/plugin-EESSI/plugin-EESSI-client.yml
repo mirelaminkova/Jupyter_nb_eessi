@@ -2,7 +2,6 @@
 - name: Configure node for access to the EESSI stack
   hosts: localhost
   gather_facts: true
-
   tasks:
     - name: Install prerequisites
       apt:
@@ -53,3 +52,92 @@
 
         - name: Probe Stratum 1 servers by geo location to trigger reordering
           shell: cvmfs_talk -i pilot.eessi-hpc.org host probe geo
+
+- name: Run JupyterLab from EESSI
+  hosts: localhost
+  become: true
+  tasks:
+    - name: Copy the run.sh script
+      copy:
+        src: files/run.sh
+        dest: /opt/run.sh
+        mode: '0777'
+
+    - name: Ensure JupyterLab systemd service is in place
+      copy:
+        dest: /etc/systemd/system/jupyterlab.service
+        content: |
+          [Unit]
+          Description=JupyterLab from EESSI Modules
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=mminkova3
+          ExecStart=/bin/bash -l -c '/opt/run.sh'
+          Restart=always
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd and enable JupyterLab service
+      systemd:
+        daemon_reload: yes
+        enabled: yes
+        name: jupyterlab
+        state: restarted
+
+    - name: Ensure JupyterLab is running
+      service:
+        name: jupyterlab
+        state: started
+        enabled: yes
+
+    - debug:
+        msg: 'JupyterLab is running at http://{{ ansible_host }}:8000'
+
+- name: Configure and deploy Nginx as a reverse proxy for JupyterLab
+  hosts: localhost
+  become: true
+  tasks:
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+        update_cache: yes
+
+    - name: Deploy Nginx configuration for JupyterLab
+      copy:
+        dest: /etc/nginx/conf.d/jupyterlab.conf
+        mode: '0644'
+        content: |
+          server {
+              listen 80;
+              server_name {{ ansible_fqdn|default(inventory_hostname) }};
+
+              location {{ jupyter_nginx_location|default('/') }} {
+                  error_page 401 = @custom_401;
+                  auth_request /validate;
+                  auth_request_set $username $upstream_http_username;
+                  proxy_set_header REMOTE_USER $username;
+                  proxy_pass http://127.0.0.1:8000;
+                  proxy_redirect http://localhost:8000/ $scheme://$host/;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection $connection_upgrade;
+                  client_max_body_size 10G;
+              }
+          }
+
+    - name: Restart Nginx
+      service:
+        name: nginx
+        state: restarted
+
+    - debug:
+        msg: 'Nginx has been configured for JupyterLab'
+
