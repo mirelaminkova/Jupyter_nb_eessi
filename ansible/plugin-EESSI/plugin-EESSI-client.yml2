@@ -38,6 +38,7 @@
             dest: /etc/cvmfs/domain.d/eessi-hpc.org.local
             force: true
             mode: '0664'
+
         - name: Substitute template variables with values
           replace:
             path: /etc/cvmfs/domain.d/eessi-hpc.org.local
@@ -45,8 +46,10 @@
             replace: "{{ item.value }}"
           loop:
             - { variable: "_src_stratum1_host_", value: "{{ src_stratum1_host }}" }
+
         - name: Update EESSI configuration
           shell: cvmfs_config probe pilot.eessi-hpc.org
+
         - name: Probe Stratum 1 servers by geo location to trigger reordering
           shell: cvmfs_talk -i pilot.eessi-hpc.org host probe geo
 
@@ -55,41 +58,19 @@
   become: true
   gather_facts: true
   tasks:
-    - name: Copy the eessi-init script to /opt
-      copy:
-        src: files/eessi-init.sh
-        dest: /opt/eessi-init.sh
-        mode: '0777'
-
-    - name: Copy the run.sh script to /opt
+    - name: Copy the run.sh script
       copy:
         src: files/run.sh
         dest: /opt/run.sh
         mode: '0777'
 
-    - name: Install missing Python dependencies
+    - name: Install missing Python dependencies inside EESSI
       pip:
         name:
           - traitlets
           - jhub-remote-user-authenticator
           - jupyterhub
         executable: pip3
-
-    - name: Install missing rpds package
-      pip:
-        name: rpds-py
-        executable: pip3
-    - name: Create /etc/jupyterhub directory
-      file:
-        path: /etc/jupyterhub
-        state: directory
-        mode: '0755'
-    - name: Deploy JupyterHub config for JupyterLab
-      copy:
-        src: files/jupyterhub_config.py
-        dest: /etc/jupyterhub/jupyterhub_config.py
-        mode: '0644'
-
     - name: Deploy EESSI initialization systemd service
       copy:
         dest: /etc/systemd/system/eessi-init.service
@@ -102,7 +83,7 @@
 
           [Service]
           Type=oneshot
-          ExecStart=/bin/bash -l -c '/opt/eessi-init.sh'
+          ExecStart=/bin/bash -l -c '/opt/run.sh'
           RemainAfterExit=yes
 
           [Install]
@@ -120,18 +101,19 @@
 
           [Service]
           Type=simple
-          ExecStart=/usr/local/bin/jupyterhub --config=/etc/jupyterhub/jupyterhub_config.py
+          User={{ ansible_user_id }}
+          ExecStart=/cvmfs/software.eessi.io/versions/2023.06/software/linux/x86_64/amd/zen2/bin/jupyter-lab --config=/etc/jupyterhub/jupyterhub_config.py
           Restart=on-failure
           RestartSec=42s
 
           [Install]
           WantedBy=multi-user.target
 
-    - name: Reload systemd configuration
+    - name: Reload systemd and enable JupyterLab services
       systemd:
         daemon_reload: yes
 
-    - name: Enable and start EESSI initialization service
+    - name: Enable and start EESSI service
       systemd:
         name: eessi-init
         enabled: yes
