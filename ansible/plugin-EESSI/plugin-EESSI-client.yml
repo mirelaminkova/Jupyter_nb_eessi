@@ -8,6 +8,7 @@
         name:
           - sudo
           - wget
+          - npm
         state: present
 
     - name: Download EESSI installation script
@@ -55,12 +56,6 @@
   become: true
   gather_facts: true
   tasks:
-    - name: Copy the eessi-init script to /opt
-      copy:
-        src: files/eessi-init.sh
-        dest: /opt/eessi-init.sh
-        mode: '0777'
-
     - name: Copy the run.sh script to /opt
       copy:
         src: files/run.sh
@@ -75,10 +70,22 @@
           - jupyterhub
         executable: pip3
 
-    - name: Install missing rpds package
-      pip:
-        name: rpds-py
-        executable: pip3
+    - name: Install JupyterHub and dependencies into system-wide EESSI Python path
+      shell: |
+        source /cvmfs/software.eessi.io/versions/2023.06/init/bash
+        module load GCCcore/13.2.0
+        module load Python/3.11.5-GCCcore-13.2.0
+        pip install --upgrade --prefix=/opt/eessi-python jupyterhub jhub-remote-user-authenticator traitlets rpds-py
+      args:
+        executable: /bin/bash
+    - name: Install configurable-http-proxy globally using EESSI's Node.js
+      shell: |
+        source /cvmfs/software.eessi.io/versions/2023.06/init/bash
+        module load GCCcore/13.2.0
+        module load nodejs/20.9.0-GCCcore-13.2.0
+        npm install -g configurable-http-proxy --prefix /usr/local
+      args:
+        executable: /bin/bash
     - name: Create /etc/jupyterhub directory
       file:
         path: /etc/jupyterhub
@@ -90,23 +97,9 @@
         dest: /etc/jupyterhub/jupyterhub_config.py
         mode: '0644'
 
-    - name: Deploy EESSI initialization systemd service
-      copy:
-        dest: /etc/systemd/system/eessi-init.service
-        mode: '0644'
-        content: |
-          [Unit]
-          Description=EESSI Environment Initialization
-          Before=jupyterlab.service
-          After=network.target
-
-          [Service]
-          Type=oneshot
-          ExecStart=/bin/bash -l -c '/opt/eessi-init.sh'
-          RemainAfterExit=yes
-
-          [Install]
-          WantedBy=multi-user.target
+    - name: Reload systemd configuration
+      systemd:
+        daemon_reload: yes
 
     - name: Deploy JupyterLab systemd service
       copy:
@@ -114,28 +107,20 @@
         mode: '0644'
         content: |
           [Unit]
-          Description=JupyterLab from EESSI Modules
-          After=network.target eessi-init.service
-          Requires=eessi-init.service
+          Description=JupyterLab via EESSI
+          After=network.target
 
           [Service]
           Type=simple
-          ExecStart=/usr/local/bin/jupyterhub --config=/etc/jupyterhub/jupyterhub_config.py
+          Environment="PATH=/opt/eessi-python/bin:/opt/eessi-node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+          Environment="PYTHONPATH=/opt/eessi-python/lib/python3.11/site-packages"
+          Environment="NODE_PATH=/opt/eessi-node/lib/node_modules"
+          ExecStart=/bin/bash -l -c '/opt/run.sh'
           Restart=on-failure
           RestartSec=42s
 
           [Install]
           WantedBy=multi-user.target
-
-    - name: Reload systemd configuration
-      systemd:
-        daemon_reload: yes
-
-    - name: Enable and start EESSI initialization service
-      systemd:
-        name: eessi-init
-        enabled: yes
-        state: started
 
     - name: Enable and start JupyterLab service
       systemd:

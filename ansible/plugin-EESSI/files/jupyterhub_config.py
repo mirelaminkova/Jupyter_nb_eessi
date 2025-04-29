@@ -34,3 +34,5 @@ c.JupyterHub.shutdown_on_logout = True
 
 c.AccessTokenAuthenticator.header_name = "REMOTE_USER"
 c.AccessTokenAuthenticator.logout_endpoint = "/logout"
+
+c.ConfigurableHTTPProxy.command = ['/usr/local/bin/configurable-http-proxy'] # add the http proxy
