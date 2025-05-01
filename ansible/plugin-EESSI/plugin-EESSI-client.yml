@@ -75,7 +75,7 @@
         source /cvmfs/software.eessi.io/versions/2023.06/init/bash
         module load GCCcore/13.2.0
         module load Python/3.11.5-GCCcore-13.2.0
-        pip install --upgrade --prefix=/opt/eessi-python jupyterhub jhub-remote-user-authenticator traitlets rpds-py
+        pip install --upgrade --user jupyterhub jhub-remote-user-authenticator traitlets rpds-py
       args:
         executable: /bin/bash
     - name: Install configurable-http-proxy globally using EESSI's Node.js
@@ -112,7 +112,7 @@
 
           [Service]
           Type=simple
-          Environment="PATH=/opt/eessi-python/bin:/opt/eessi-node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+          Environment="PATH=/root/.local/bin:/opt/eessi-python/bin:/opt/eessi-node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
           Environment="PYTHONPATH=/opt/eessi-python/lib/python3.11/site-packages"
           Environment="NODE_PATH=/opt/eessi-node/lib/node_modules"
           ExecStart=/bin/bash -l -c '/opt/run.sh'
