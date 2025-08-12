@@ -60,7 +60,7 @@
 
   vars:
     eessi_version: "2023.06"
-    eessi_python_module: "Python/3.11.5-GCCcore-13.2.0"
+    eessi_python_module: "Python/3.11.3-GCCcore-13.2.0" 
     eessi_lab_module:    "JupyterLab/4.0.5-GCCcore-12.3.0"
     eessi_nb_module:     "JupyterNotebook/7.0.2-GCCcore-12.3.0"
 
@@ -144,7 +144,7 @@
           echo "Python path: $(which python)"
           
           echo "Installing JupyterHub and dependencies in EESSI Python..."
-          pip install --user \
+          pip install \
             jupyterhub==4.0.1 \
             jsonschema>=4.0.0 \
             Jinja2==3.0.3 \
@@ -185,7 +185,7 @@
           module load {{ eessi_python_module }}
           
           # Run JupyterHub from EESSI environment
-          exec ~/.local/bin/jupyterhub "$@"
+          exec jupyterhub "$@"
 
     - name: Create EESSI single-user wrapper
       copy:
@@ -207,12 +207,29 @@
           # Load both so either UI works; Hub sets the port/IP.
           module load {{ eessi_lab_module }} || true
           #module load {{ eessi_nb_module }} || true
+          
+          # Find jupyterhub-singleuser (should be in PATH after loading EESSI)
+          if command -v jupyterhub-singleuser >/dev/null 2>&1; then
+            JUPYTERHUB_SINGLEUSER="jupyterhub-singleuser"
+          elif [ -f "/root/.local/bin/jupyterhub-singleuser" ]; then
+            JUPYTERHUB_SINGLEUSER="/root/.local/bin/jupyterhub-singleuser"
+          elif [ -f "$HOME/.local/bin/jupyterhub-singleuser" ]; then
+            JUPYTERHUB_SINGLEUSER="$HOME/.local/bin/jupyterhub-singleuser"
+          else
+            echo "ERROR: jupyterhub-singleuser not found in expected locations"
+            echo "Checked PATH, /root/.local/bin/, and $HOME/.local/bin/"
+            echo "Available Python packages:"
+            pip list | grep -i jupyter || true
+            exit 1
+          fi
 
-          # Use the jupyterhub-singleuser from the same EESSI environment
-          exec ~/.local/bin/jupyterhub-singleuser \
+          echo "Using jupyterhub-singleuser from: $JUPYTERHUB_SINGLEUSER"
+          # Use the found jupyterhub-singleuser
+          exec "$JUPYTERHUB_SINGLEUSER" \
             --ServerApp.default_url=/lab \
             --ServerApp.trust_xheaders=True \
             "$@"
+
 
     - name: Ensure JupyterHub config directory exists
       file:
