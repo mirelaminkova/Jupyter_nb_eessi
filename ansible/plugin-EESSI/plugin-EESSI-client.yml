@@ -115,26 +115,77 @@
         name: nodejs
         update_cache: yes
 
-    - name: Install JupyterHub + required Python packages locally
-      pip:
-        name:
-          - jupyterhub==4.0.1
-          - jsonschema>=4.0.0
-          - Jinja2<3.1
-          - markupsafe==2.0.1
-          - jupyterlab==4.3.5
-          - virtualenv==20.24.2
-          - jupyterlab-git
-          - jhub-remote-user-authenticator==0.1.0
-          - traitlets==5.9.0
-          - nbdime
-        executable: pip3
-
     - name: Install configurable-http-proxy (CHP)
       npm:
         global: yes
         name: configurable-http-proxy
         version: '4.5.5'
+
+    - name: Create JupyterHub installation script using EESSI
+      copy:
+        dest: /tmp/install_jupyterhub_eessi.sh
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          set -eo pipefail
+          
+          echo "Loading EESSI environment..."
+          if [ -f "/cvmfs/software.eessi.io/versions/{{ eessi_version }}/init/bash" ]; then
+            source /cvmfs/software.eessi.io/versions/{{ eessi_version }}/init/bash
+          else
+            echo "EESSI init script not found"; exit 1
+          fi
+          
+          echo "Loading Python module..."
+          module purge || true
+          module load {{ eessi_python_module }}
+          
+          echo "Python version: $(python --version)"
+          echo "Python path: $(which python)"
+          
+          echo "Installing JupyterHub and dependencies in EESSI Python..."
+          pip install --user \
+            jupyterhub==4.0.1 \
+            jsonschema>=4.0.0 \
+            Jinja2==3.0.3 \
+            markupsafe==2.0.1 \
+            jupyterlab==4.3.5 \
+            virtualenv==20.24.2 \
+            jupyterlab-git \
+            jhub-remote-user-authenticator==0.1.0 \
+            traitlets==5.9.0 \
+            nbdime
+          
+          echo "JupyterHub installation completed successfully"
+
+    - name: Execute JupyterHub installation in EESSI
+      shell: /tmp/install_jupyterhub_eessi.sh
+      register: jupyterhub_install_output
+
+    - name: Display JupyterHub installation output
+      debug:
+        var: jupyterhub_install_output
+
+    - name: Create JupyterHub wrapper script
+      copy:
+        dest: /usr/local/bin/jupyterhub-eessi
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -eo pipefail
+          
+          # Load EESSI
+          if [ -f "/cvmfs/software.eessi.io/versions/{{ eessi_version }}/init/bash" ]; then
+            source /cvmfs/software.eessi.io/versions/{{ eessi_version }}/init/bash
+          else
+            echo "EESSI init script not found"; exit 1
+          fi
+          
+          # Load Python module
+          module load {{ eessi_python_module }}
+          
+          # Run JupyterHub from EESSI environment
+          exec ~/.local/bin/jupyterhub "$@"
 
     - name: Create EESSI single-user wrapper
       copy:
@@ -146,9 +197,7 @@
 
           # Load EESSI
           if [ -f "/cvmfs/software.eessi.io/versions/{{ eessi_version }}/init/bash" ]; then
-            set +u
             source /cvmfs/software.eessi.io/versions/{{ eessi_version }}/init/bash
-            set -u
           else
             echo "EESSI init script not found"; exit 1
           fi
@@ -159,12 +208,12 @@
           module load {{ eessi_lab_module }} || true
           #module load {{ eessi_nb_module }} || true
 
-          # Default to JupyterLab; users can switch to tree if they want
-          #exec jupyter-lab --no-browser --ServerApp.trust_xheaders=True "$@"
-          exec /usr/local/bin/jupyterhub-singleuser \
+          # Use the jupyterhub-singleuser from the same EESSI environment
+          exec ~/.local/bin/jupyterhub-singleuser \
             --ServerApp.default_url=/lab \
             --ServerApp.trust_xheaders=True \
             "$@"
+
     - name: Ensure JupyterHub config directory exists
       file:
         path: /etc/jupyterhub/
@@ -187,7 +236,9 @@
           c.Spawner.cmd = ["/usr/local/bin/jupyter-eessi.sh"]
           c.Spawner.default_url = "/lab"
 
-          #c.JupyterHub.trust_xheaders = True
+          # Increase timeout to allow for EESSI module loading
+          c.Spawner.http_timeout = 60
+          c.Spawner.start_timeout = 60
 
     - name: Ensure systemd unit directory exists (for Debian/Ubuntu)
       file:
@@ -206,9 +257,11 @@
 
           [Service]
           Type=simple
-          ExecStart=/usr/local/bin/jupyterhub --config=/etc/jupyterhub/jupyterhub_config.py
+          ExecStart=/usr/local/bin/jupyterhub-eessi --config=/etc/jupyterhub/jupyterhub_config.py
           Restart=on-failure
           RestartSec=42s
+          # Ensure EESSI is available
+          Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
           [Install]
           WantedBy=multi-user.target
