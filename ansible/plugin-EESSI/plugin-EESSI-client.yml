@@ -127,6 +127,7 @@
           - jupyterlab-git
           - jhub-remote-user-authenticator==0.1.0
           - traitlets==5.9.0
+          - nbdime
         executable: pip3
 
     - name: Install configurable-http-proxy (CHP)
@@ -159,8 +160,11 @@
           #module load {{ eessi_nb_module }} || true
 
           # Default to JupyterLab; users can switch to tree if they want
-          exec jupyter-lab --no-browser --ServerApp.trust_xheaders=True "$@"
-
+          #exec jupyter-lab --no-browser --ServerApp.trust_xheaders=True "$@"
+          exec /usr/local/bin/jupyterhub-singleuser \
+            --ServerApp.default_url=/lab \
+            --ServerApp.trust_xheaders=True \
+            "$@"
     - name: Ensure JupyterHub config directory exists
       file:
         path: /etc/jupyterhub/
@@ -183,7 +187,7 @@
           c.Spawner.cmd = ["/usr/local/bin/jupyter-eessi.sh"]
           c.Spawner.default_url = "/lab"
 
-          c.JupyterHub.trust_xheaders = True
+          #c.JupyterHub.trust_xheaders = True
 
     - name: Ensure systemd unit directory exists (for Debian/Ubuntu)
       file:
