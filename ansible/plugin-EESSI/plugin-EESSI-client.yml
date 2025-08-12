@@ -53,91 +53,199 @@
         - name: Probe Stratum 1 servers by geo location to trigger reordering
           shell: cvmfs_talk -i pilot.eessi-hpc.org host probe geo
 
-- name: Run JupyterLab from EESSI
+- name: Install and configure JupyterHub (CHP) with EESSI-backed user servers
   hosts: localhost
   become: true
-  tasks:
-    - name: Copy the run.sh script
-      copy:
-        src: files/run.sh
-        dest: /opt/run.sh
-        mode: '0777'
+  gather_facts: true
 
-    - name: Ensure JupyterLab systemd service is in place
+  vars:
+    eessi_version: "2023.06"
+    eessi_python_module: "Python/3.11.5-GCCcore-13.2.0"
+    eessi_lab_module:    "JupyterLab/4.0.5-GCCcore-12.3.0"
+    eessi_nb_module:     "JupyterNotebook/7.0.2-GCCcore-12.3.0"
+
+    jupyter_nginx_location: "/"
+
+  tasks:
+    - name: Base OS deps (incl. autofs so /cvmfs works)
+      apt:
+        name:
+          - apt-transport-https
+          - python3
+          - python3-setuptools
+          - python3-pip
+          - jq
+          - curl
+          - ca-certificates
+          - gnupg
+          - autofs
+        state: present
+        update_cache: yes
+
+    - name: Ensure autofs is enabled (mount /cvmfs on-demand)
+      systemd:
+        name: autofs
+        state: started
+        enabled: true
+
+    - name: Create keyrings dir
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+
+    - name: Install NodeSource GPG key
+      shell: >
+        curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+      args: { executable: /bin/bash }
+
+    - name: Add NodeSource repository (Node 20)
+      shell: >
+        echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main"
+        | tee /etc/apt/sources.list.d/nodesource.list
+      args: { executable: /bin/bash }
+
+    - name: Remove conflicting libnode package (if present)
+      apt:
+        name: libnode72
+        state: absent
+
+    - name: Install Node.js
+      apt:
+        name: nodejs
+        update_cache: yes
+
+    - name: Install JupyterHub + required Python packages locally
+      pip:
+        name:
+          - jupyterhub==4.0.1
+          - jsonschema>=4.0.0
+          - Jinja2<3.1
+          - markupsafe==2.0.1
+          - jupyterlab==4.3.5
+          - virtualenv==20.24.2
+          - jupyterlab-git
+          - jhub-remote-user-authenticator==0.1.0
+          - traitlets==5.9.0
+        executable: pip3
+
+    - name: Install configurable-http-proxy (CHP)
+      npm:
+        global: yes
+        name: configurable-http-proxy
+        version: '4.5.5'
+
+    # ---- EESSI single-user wrapper: load EESSI modules, then start Lab (or Notebook) ----
+    - name: Create EESSI single-user wrapper
       copy:
-        dest: /etc/systemd/system/jupyterlab.service
+        dest: /usr/local/bin/jupyter-eessi.sh
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          # Load EESSI
+          if [ -f "/cvmfs/software.eessi.io/versions/{{ eessi_version }}/init/bash" ]; then
+            source /cvmfs/software.eessi.io/versions/{{ eessi_version }}/init/bash
+          else
+            echo "EESSI init script not found"; exit 1
+          fi
+
+          module purge || true
+          module load {{ eessi_python_module }} || true
+          # Load both so either UI works; Hub sets the port/IP.
+          module load {{ eessi_lab_module }} || true
+          module load {{ eessi_nb_module }} || true
+
+          # Default to JupyterLab; users can switch to tree if they want
+          exec jupyter-lab --no-browser --ServerApp.trust_xheaders=True
+
+    - name: Ensure JupyterHub config directory exists
+      file:
+        path: /etc/jupyterhub/
+        state: directory
+
+    - name: Write jupyterhub_config.py (uses CHP; spawns via EESSI wrapper)
+      copy:
+        dest: /etc/jupyterhub/jupyterhub_config.py
+        mode: "0644"
+        content: |
+          c = get_config()
+          c.JupyterHub.bind_url = "http://127.0.0.1:8000"
+
+          # Upstream auth via Nginx auth_request (REMOTE_USER)
+          c.JupyterHub.authenticator_class = "jhub_remote_user_authenticator.remote_user_auth.RemoteUserAuthenticator"
+          c.RemoteUserAuthenticator.header_name = "REMOTE_USER"
+
+          # Spawn notebooks via EESSI modules
+          c.JupyterHub.spawner_class = "jupyterhub.spawner.LocalProcessSpawner"
+          c.Spawner.cmd = ["/usr/local/bin/jupyter-eessi.sh"]
+          c.Spawner.default_url = "/lab"
+
+          c.JupyterHub.trust_xheaders = True
+
+    - name: Ensure systemd unit directory exists (for Debian/Ubuntu)
+      file:
+        path: /usr/lib/systemd/system
+        state: directory
+
+    - name: Install JupyterHub systemd unit
+      copy:
+        dest: /usr/lib/systemd/system/jupyterhub.service
+        mode: "0644"
         content: |
           [Unit]
-          Description=JupyterLab from EESSI Modules
-          After=network.target
+          Description=JupyterHub daemon (CHP) with EESSI user servers
+          After=network.target autofs.service
+          Requires=autofs.service
 
           [Service]
           Type=simple
-          User=mminkova3
-          ExecStart=/bin/bash -l -c '/opt/run.sh'
-          Restart=always
-          RestartSec=10
+          ExecStart=/usr/local/bin/jupyterhub --config=/etc/jupyterhub/jupyterhub_config.py
+          Restart=on-failure
+          RestartSec=42s
 
           [Install]
           WantedBy=multi-user.target
 
-    - name: Reload systemd and enable JupyterLab service
+    - name: Reload and start JupyterHub
       systemd:
-        daemon_reload: yes
-        enabled: yes
-        name: jupyterlab
         state: restarted
-
-    - name: Ensure JupyterLab is running
-      service:
-        name: jupyterlab
-        state: started
+        daemon_reload: yes
+        name: jupyterhub
         enabled: yes
 
-    - debug:
-        msg: 'JupyterLab is running at http://{{ ansible_host }}:8000'
-
-- name: Configure and deploy Nginx as a reverse proxy for JupyterLab
+- name: Keep Nginx reverse proxy exactly as you have it
   hosts: localhost
   become: true
+  gather_facts: false
+
+  vars:
+    jupyter_nginx_location: "/"
+
   tasks:
-    - name: Install Nginx
-      apt:
-        name: nginx
-        state: present
-        update_cache: yes
-
-    - name: Deploy Nginx configuration for JupyterLab
+    - name: Create nginx location block
       copy:
-        dest: /etc/nginx/conf.d/jupyterlab.conf
-        mode: '0644'
+        dest: /etc/nginx/app-location-conf.d/jupyterhub.conf
+        mode: 0644
         content: |
-          server {
-              listen 80;
-              server_name {{ ansible_fqdn|default(inventory_hostname) }};
-
-              location {{ jupyter_nginx_location|default('/') }} {
-                  error_page 401 = @custom_401;
-                  auth_request /validate;
-                  auth_request_set $username $upstream_http_username;
-                  proxy_set_header REMOTE_USER $username;
-                  proxy_pass http://127.0.0.1:8000;
-                  proxy_redirect http://localhost:8000/ $scheme://$host/;
-                  proxy_set_header X-Real-IP $remote_addr;
-                  proxy_set_header Host $host;
-                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                  proxy_set_header X-Forwarded-Proto $scheme;
-                  proxy_set_header Upgrade $http_upgrade;
-                  proxy_set_header Connection $connection_upgrade;
-                  client_max_body_size 10G;
-              }
+          location {{ jupyter_nginx_location|default('/') }} {
+              error_page 401 = @custom_401;
+              auth_request /validate;
+              auth_request_set $username $upstream_http_username;
+              proxy_set_header REMOTE_USER $username;
+              proxy_pass http://127.0.0.1:8000;
+              proxy_redirect http://localhost:8000/ $scheme://$host/;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection $connection_upgrade;
+              client_max_body_size 10G;
           }
 
-    - name: Restart Nginx
+    - name: Restart nginx
       service:
         name: nginx
         state: restarted
-
-    - debug:
-        msg: 'Nginx has been configured for JupyterLab'
-
