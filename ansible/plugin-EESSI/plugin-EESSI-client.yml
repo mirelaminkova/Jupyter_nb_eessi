@@ -135,18 +135,19 @@
         name: configurable-http-proxy
         version: '4.5.5'
 
-    # ---- EESSI single-user wrapper: load EESSI modules, then start Lab (or Notebook) ----
     - name: Create EESSI single-user wrapper
       copy:
         dest: /usr/local/bin/jupyter-eessi.sh
         mode: "0755"
         content: |
           #!/usr/bin/env bash
-          set -euo pipefail
+          set -eo pipefail
 
           # Load EESSI
           if [ -f "/cvmfs/software.eessi.io/versions/{{ eessi_version }}/init/bash" ]; then
+            set +u
             source /cvmfs/software.eessi.io/versions/{{ eessi_version }}/init/bash
+            set -u
           else
             echo "EESSI init script not found"; exit 1
           fi
@@ -155,7 +156,7 @@
           module load {{ eessi_python_module }} || true
           # Load both so either UI works; Hub sets the port/IP.
           module load {{ eessi_lab_module }} || true
-          module load {{ eessi_nb_module }} || true
+          #module load {{ eessi_nb_module }} || true
 
           # Default to JupyterLab; users can switch to tree if they want
           exec jupyter-lab --no-browser --ServerApp.trust_xheaders=True
