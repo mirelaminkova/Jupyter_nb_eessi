@@ -60,7 +60,7 @@
 
   vars:
     eessi_version: "2023.06"
-    eessi_python_module: "Python/3.11.3-GCCcore-13.2.0" 
+    eessi_python_module: "Python/3.11.5-GCCcore-13.2.0" 
     eessi_lab_module:    "JupyterLab/4.0.5-GCCcore-12.3.0"
     eessi_nb_module:     "JupyterNotebook/7.0.2-GCCcore-12.3.0"
 
